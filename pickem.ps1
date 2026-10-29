@@ -45,9 +45,12 @@ function Update-Pickem {
         $opts = Get-PickemOptions $ev
         $existing = Find-BotMessage $cid $key
 
-        # Open: teams known and the match is within openHours
+        # Open as soon as both teams are known, but not overnight (01:00-10:00 TW): wait for 10:00 so
+        # people see it, unless the match itself starts before then
         if (-not $existing) {
-            if ($ev.state -ne 'unstarted' -or $nowUtc -ge $t -or $t -gt $nowUtc.AddHours($pc.openHours)) { continue }
+            if ($ev.state -ne 'unstarted' -or $nowUtc -ge $t) { continue }
+            $overnight = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.scheduleHourTW
+            if ($overnight -and $t.AddHours(8) -gt $nowTW.Date.AddHours($cfg.scheduleHourTW)) { continue }
             $isFinal = $ev.blockName -eq $pc.finalBlock
             $rules = '按下方反應投票，一人限一個選項（多選視為無效），開賽即截止。猜中勝方 1 分，比分全中再 +1'
             if ($isFinal) { $rules += '，**決賽雙倍**' }

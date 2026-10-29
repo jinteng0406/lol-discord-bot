@@ -25,8 +25,7 @@
   "pickem": {
     "league": "worlds",
     "blocks": ["八強賽", "準決賽", "決賽"],
-    "finalBlock": "決賽",
-    "openHours": 24
+    "finalBlock": "決賽"
   },
   "odds": {
     "eventSlug": "worlds-2026-winner",
