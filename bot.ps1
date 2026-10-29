@@ -133,8 +133,10 @@ function Get-Events {
 function Get-LeagueColor($ev) { [int]$cfg.leagues.($ev.league.slug).color }
 function Format-TW([DateTime]$utc) { $utc.AddHours(8).ToString('HH:mm') }
 
-. "$root\odds.ps1"
-. "$root\stats.ps1"
+# Read as UTF-8 explicitly: PS 5.1 would parse a BOM-less file as ANSI and break the Chinese strings
+foreach ($part in 'odds.ps1', 'stats.ps1') {
+    . ([ScriptBlock]::Create((Get-Content "$root\$part" -Raw -Encoding UTF8)))
+}
 
 $events = Get-Events
 $silent = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.silentToHourTW
