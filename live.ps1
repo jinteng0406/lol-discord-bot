@@ -1,35 +1,48 @@
 ﻿# Daily schedule (post once, then keep it in sync), pre-match reminders, per-game lineup cards and the
 # Worlds champion card. Dot-sourced by bot.ps1.
 
+# One embed field per match so Discord spaces them out. The field name carries time / teams / BO, the value
+# the match's state: a thin win-rate bar before it starts, then 進行中 / the final score.
+# Times before 10:00 are implicitly tomorrow (the description says the window ends at 10:00).
 function New-ScheduleEmbed([DateTime]$Day, $Todays, [hashtable]$Odds) {
-    $fields = @()
-    # Kept short so lines do not wrap in narrow clients: the stage goes in the field name when shared,
-    # and times before 10:00 are implicitly tomorrow (the description says the window ends at 10:00)
-    foreach ($g in ($Todays | Group-Object { $_.league.name })) {
-        $blocks = @($g.Group | ForEach-Object { $_.blockName } | Select-Object -Unique)
-        $lines = foreach ($ev in $g.Group) {
-            $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-            $line = "``$(Format-TW (ConvertTo-Utc $ev.startTime))`` **$a** vs **$b** · BO$($ev.match.strategy.count)"
-            if ($blocks.Count -gt 1) { $line += " · $($ev.blockName)" }
+    $groups = @($Todays | ForEach-Object { "$($_.league.name) · $($_.blockName)" } | Select-Object -Unique)
+    $fields = @(foreach ($ev in $Todays) {
+            $ta = $ev.match.teams[0]; $tb = $ev.match.teams[1]
+            $name = "$(Format-TW (ConvertTo-Utc $ev.startTime)) · $($ta.code) vs $($tb.code) · BO$($ev.match.strategy.count)"
+            if ($groups.Count -gt 1) { $name = "$($ev.league.name) · $name" }
             $o = $Odds[$ev.match.id]
-            if ($o) {
-                # 10-square split bar: blue = left team's win rate, red = right team's
-                $n = [int][Math]::Round($o[$a] / 10)
-                $line += "`n**$($o[$a])%** " + ('🟦' * $n) + ('🟥' * (10 - $n)) + " **$($o[$b])%**"
+            if ($ev.state -eq 'completed') {
+                $value = "已結束　$($ta.code) **$($ta.result.gameWins) – $($tb.result.gameWins)** $($tb.code)"
+            } elseif ($ev.state -eq 'inProgress') {
+                $value = '🔴 進行中'
+            } elseif ($o) {
+                # Filled = left team's share, hollow = right team's
+                $n = [int][Math]::Round($o[$ta.code] / 10)
+                $value = "$($ta.code) **$($o[$ta.code])%** " + ('▰' * $n) + ('▱' * (10 - $n)) + " **$($o[$tb.code])%** $($tb.code)"
+            } else {
+                $value = '勝率尚未開盤'
             }
-            $line
-        }
-        $name = if ($blocks.Count -eq 1) { "$($g.Name) · $($blocks[0])" } else { $g.Name }
-        $fields += @{ name = $name; value = ($lines -join "`n`n"); inline = $false }
-    }
+            @{ name = $name; value = $value; inline = $false }
+        })
+    $desc = '時間為台灣時間，涵蓋今天 10:00 到明天 10:00'
+    if ($groups.Count -eq 1) { $desc = "**$($groups[0])**`n$desc" }
     $dow = '日一二三四五六'[[int]$Day.DayOfWeek]
     @{
         title  = "📅 $($Day.ToString('M/d'))（週$dow）賽程"
-        description = '時間為台灣時間，涵蓋今天 10:00 到明天 10:00'
+        description = $desc
         color  = Get-LeagueColor $Todays[0]
         fields = $fields
         footer = @{ text = 'LoL Esports' }
     }
+}
+
+# What must be synced right away: each field's name (time/teams/BO) plus whether it is live or finished.
+# Win-rate numbers are left out; they refresh hourly.
+function Get-ScheduleSignature($Fields) {
+    (@($Fields) | ForEach-Object {
+            $state = if ("$($_.value)" -match '已結束') { "$($_.value)" } elseif ("$($_.value)" -match '進行中') { 'live' } else { 'pre' }
+            "$($_.name)|$state"
+        }) -join "`n"
 }
 
 # Window is [today 10:00 TW, tomorrow 10:00 TW). After the first post the message is edited when matches
@@ -50,31 +63,28 @@ function Update-Schedule {
         return
     }
 
-    # Times/teams changes are synced right away; win rates only in the first minutes of each hour,
+    # Time/team/state changes are synced right away; win rates only in the first minutes of each hour,
     # and at most every 30 min, so the post is not re-edited (and the market re-queried) every pass
-    $oldText = (@($existing.msg.embeds[0].fields) | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
+    $oldFields = @($existing.msg.embeds[0].fields)
+    $oldText = ($oldFields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
     $plain = New-ScheduleEmbed $day $todays @{}
-    $plainText = ($plain.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
-    # Drop the win-rate bar lines (and the older inline "20% vs 80%" form) to compare times/teams only
-    $oldPlain = ($oldText -replace "`n[^`n]*🟦[^`n]*|`n[^`n]*🟥[^`n]*", '') -replace ' \d+% vs \d+% ', ' vs '
-    $structural = $oldPlain -ne $plainText
+    $structural = (Get-ScheduleSignature $oldFields) -ne (Get-ScheduleSignature $plain.fields)
     $last = if ($existing.msg.edited_timestamp) { $existing.msg.edited_timestamp } else { $existing.msg.timestamp }
     $oddsDue = $nowTW.Minute -lt 5 -and (ConvertTo-Utc $last) -lt $nowUtc.AddMinutes(-30)
     if (-not $structural -and -not $oddsDue) { return }
     $embed = New-ScheduleEmbed $day $todays (Get-ScheduleOdds $todays)
     $newText = ($embed.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
-    if ($oldText -eq $newText) { return }
+    if ($oldText -eq $newText -and "$($existing.msg.embeds[0].description)" -eq $embed.description) { return }
 
     foreach ($ev in $todays) {
         if (-not (Test-TeamsKnown $ev)) { continue }
         $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-        $pattern = '`([^`]+)` \*\*' + [regex]::Escape($a) + '\*\*(?: \d+%)? vs (?:\d+% )?\*\*' + [regex]::Escape($b) + '\*\*'
+        # Matches both this layout ("04:00 · CFO vs KC") and earlier ones ("`04:00（隔日）` **CFO** vs **KC**");
+        # only the clock time is compared, so a change in how the time is written is not a reschedule
+        $pattern = '(\d{1,2}:\d{2})[^\n]{0,8}?\**' + [regex]::Escape($a) + '\** vs \**' + [regex]::Escape($b) + '\**'
         $old = [regex]::Match($oldText, $pattern); $new = [regex]::Match($newText, $pattern)
         if (-not $old.Success -or -not $new.Success) { continue }
-        # Compare the clock time only, so a change in how the time is written is not a reschedule
-        $oldTime = [regex]::Match($old.Groups[1].Value, '\d{1,2}:\d{2}').Value
-        $newTime = [regex]::Match($new.Groups[1].Value, '\d{1,2}:\d{2}').Value
-        if ($oldTime -eq $newTime) { continue }
+        if ($old.Groups[1].Value -eq $new.Groups[1].Value) { continue }
         $note = @{
             title = '⚠️ 賽程異動'
             description = "**$a** vs **$b** 改到 ``$($new.Groups[1].Value)``（原 ``$($old.Groups[1].Value)``）"
