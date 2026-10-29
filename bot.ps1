@@ -57,7 +57,7 @@ function Invoke-Api([string]$Method, [string]$Uri, [hashtable]$Headers, $Body, [
                 Start-Sleep -Milliseconds ([int]($wait * 1000) + 250)
                 continue
             }
-            throw "$Method $Uri failed ($code): $($_.ErrorDetails.Message)"
+            throw "$Method $Uri failed ($code): $($_.Exception.Message) $($_.ErrorDetails.Message)"
         }
     }
     throw "$Method $Uri still rate limited"
