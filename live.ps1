@@ -71,8 +71,17 @@ function Update-Schedule {
     $structural = (Get-ScheduleSignature $oldFields) -ne (Get-ScheduleSignature $plain.fields)
     $last = if ($existing.msg.edited_timestamp) { $existing.msg.edited_timestamp } else { $existing.msg.timestamp }
     $oddsDue = $nowTW.Minute -lt 5 -and (ConvertTo-Utc $last) -lt $nowUtc.AddMinutes(-30)
+    # A match still shown without odds is retried every 15 min instead of waiting for the hour
+    $missing = @($oldFields | Where-Object { "$($_.value)" -eq '勝率尚未開盤' }).Count -gt 0
+    if ($missing -and $nowTW.Minute % 15 -lt 5) { $oddsDue = $true }
     if (-not $structural -and -not $oddsDue) { return }
     $embed = New-ScheduleEmbed $day $todays (Get-ScheduleOdds $todays)
+    # A failed lookup (network hiccup) keeps the odds already shown rather than blanking them
+    foreach ($f in $embed.fields) {
+        if ($f.value -ne '勝率尚未開盤') { continue }
+        $prev = $oldFields | Where-Object { $_.name -eq $f.name -and "$($_.value)" -match '▰|▱' } | Select-Object -First 1
+        if ($prev) { $f.value = $prev.value }
+    }
     $newText = ($embed.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
     if ($oldText -eq $newText -and "$($existing.msg.embeds[0].description)" -eq $embed.description) { return }
 
