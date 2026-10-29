@@ -1,7 +1,7 @@
 ﻿# Daily schedule (post once, then keep it in sync), pre-match reminders, per-game lineup cards and the
 # Worlds champion card. Dot-sourced by bot.ps1.
 
-function New-ScheduleEmbed([DateTime]$Day, $Todays) {
+function New-ScheduleEmbed([DateTime]$Day, $Todays, [hashtable]$Odds) {
     $fields = @()
     foreach ($g in ($Todays | Group-Object { $_.league.name })) {
         $lines = foreach ($ev in $g.Group) {
@@ -9,7 +9,9 @@ function New-ScheduleEmbed([DateTime]$Day, $Todays) {
             $time = Format-TW $t
             if ($t.AddHours(8).Date -gt $Day) { $time += '（隔日）' }
             $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-            "``$time`` **$a** vs **$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
+            $o = $Odds[$ev.match.id]
+            $vs = if ($o) { " $($o[$a])% vs $($o[$b])% " } else { ' vs ' }
+            "``$time`` **$a**$vs**$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
         }
         $fields += @{ name = $g.Name; value = ($lines -join "`n"); inline = $false }
     }
@@ -34,22 +36,30 @@ function Update-Schedule {
     $todays = @($events | Where-Object { $t = ConvertTo-Utc $_.startTime; $t -ge $winStart -and $t -lt $winEnd } |
         Sort-Object { ConvertTo-Utc $_.startTime })
     if (-not $todays.Count) { return }
-    $embed = New-ScheduleEmbed $day $todays
     $cid = $cfg.channels.schedule
     $existing = Find-BotMessage $cid $key
     if (-not $existing) {
-        Send-Embed $cid $embed $key -Silent:$silent
+        Send-Embed $cid (New-ScheduleEmbed $day $todays (Get-ScheduleOdds $todays)) $key -Silent:$silent
         return
     }
 
+    # Times/teams changes are synced right away; win rates only in the first minutes of each hour,
+    # and at most every 30 min, so the post is not re-edited (and the market re-queried) every pass
     $oldText = (@($existing.msg.embeds[0].fields) | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
+    $plain = New-ScheduleEmbed $day $todays @{}
+    $plainText = ($plain.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
+    $structural = ($oldText -replace ' \d+% vs \d+% ', ' vs ') -ne $plainText
+    $last = if ($existing.msg.edited_timestamp) { $existing.msg.edited_timestamp } else { $existing.msg.timestamp }
+    $oddsDue = $nowTW.Minute -lt 5 -and (ConvertTo-Utc $last) -lt $nowUtc.AddMinutes(-30)
+    if (-not $structural -and -not $oddsDue) { return }
+    $embed = New-ScheduleEmbed $day $todays (Get-ScheduleOdds $todays)
     $newText = ($embed.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
     if ($oldText -eq $newText) { return }
 
     foreach ($ev in $todays) {
         if (-not (Test-TeamsKnown $ev)) { continue }
         $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-        $pattern = '`([^`]+)` \*\*' + [regex]::Escape($a) + '\*\* vs \*\*' + [regex]::Escape($b) + '\*\*'
+        $pattern = '`([^`]+)` \*\*' + [regex]::Escape($a) + '\*\*(?: \d+%)? vs (?:\d+% )?\*\*' + [regex]::Escape($b) + '\*\*'
         $old = [regex]::Match($oldText, $pattern); $new = [regex]::Match($newText, $pattern)
         if (-not $old.Success -or -not $new.Success -or $old.Groups[1].Value -eq $new.Groups[1].Value) { continue }
         $note = @{
@@ -62,6 +72,16 @@ function Update-Schedule {
         if (-not ((Get-PostedKeys $cid) -contains $chgKey)) { Send-Embed $cid $note $chgKey -Silent:$silent }
     }
     Edit-Embed $cid $existing.id $embed $key
+}
+
+# matchId -> @{ code = % } for matches not yet started; a failed lookup just leaves that match without odds
+function Get-ScheduleOdds($Todays) {
+    $odds = @{}
+    foreach ($ev in $Todays) {
+        if ($ev.state -ne 'unstarted' -or -not (Test-TeamsKnown $ev)) { continue }
+        try { $o = Get-MatchOdds $ev; if ($o) { $odds[$ev.match.id] = $o } } catch {}
+    }
+    $odds
 }
 
 function Get-StreamLinks($ev) {

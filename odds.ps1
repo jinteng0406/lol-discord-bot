@@ -79,6 +79,44 @@ function Get-OddsData {
     $script:oddsData
 }
 
+# Series-winner market for one scheduled match: @{ <code> = <whole %> } or $null when no market exists.
+# Found by search, then matched on market start time and both team names (search also returns other games).
+function Get-MatchOdds($ev) {
+    if (-not $script:matchOdds) { $script:matchOdds = @{} }
+    $id = $ev.match.id
+    if ($script:matchOdds.ContainsKey($id)) { return $script:matchOdds[$id] }
+    $script:matchOdds[$id] = $null
+    $ta = $ev.match.teams[0]; $tb = $ev.match.teams[1]
+    $marketName = @{}
+    foreach ($p in $oc.teams.PSObject.Properties) { $marketName[$p.Value] = $p.Name }
+    $na = if ($marketName[$ta.code]) { $marketName[$ta.code] } else { $ta.name }
+    $nb = if ($marketName[$tb.code]) { $marketName[$tb.code] } else { $tb.name }
+    $t = ConvertTo-Utc $ev.startTime
+    $r = Invoke-Api GET "$pmGamma/public-search?q=$([Uri]::EscapeDataString("$na $nb"))" @{} $null
+    foreach ($e in @($r.events)) {
+        if ("$($e.slug)" -notlike 'lol-*' -or $e.closed) { continue }
+        foreach ($m in @($e.markets)) {
+            if ($m.sportsMarketType -ne 'moneyline' -or $m.closed -or -not $m.gameStartTime) { continue }
+            if ([Math]::Abs(([DateTimeOffset]::Parse("$($m.gameStartTime)").UtcDateTime - $t).TotalHours) -gt 6) { continue }
+            # Assign first, then enumerate: @(ConvertFrom-Json '[..]') in PS 5.1 is one element holding the array
+            $outs = ConvertFrom-Json $m.outcomes
+            $outs = @($outs | ForEach-Object { $_ })
+            $ia = -1; $ib = -1
+            for ($k = 0; $k -lt $outs.Count; $k++) {
+                if ([string]::Equals("$($outs[$k])", $na, [StringComparison]::OrdinalIgnoreCase)) { $ia = $k }
+                if ([string]::Equals("$($outs[$k])", $nb, [StringComparison]::OrdinalIgnoreCase)) { $ib = $k }
+            }
+            if ($outs.Count -ne 2 -or $ia -lt 0 -or $ib -lt 0 -or $ia -eq $ib) { continue }
+            $p0 = [double](ConvertFrom-Json $m.outcomePrices)[0]
+            if ($m.bestBid -and $m.bestAsk) { $p0 = ([double]$m.bestBid + [double]$m.bestAsk) / 2 }
+            $pa = [int][Math]::Round(100 * $(if ($ia -eq 0) { $p0 } else { 1 - $p0 }))
+            $script:matchOdds[$id] = @{ $ta.code = $pa; $tb.code = 100 - $pa }
+            return $script:matchOdds[$id]
+        }
+    }
+    $null
+}
+
 function Format-Pct([double]$v) { if ($v -gt 0 -and $v -lt 0.05) { '<0.1%' } else { '{0:0.0}%' -f $v } }
 
 # "BLG 31.0% → 38.2% ▲　TES 2.1% → 淘汰" for a Worlds series that started at $startUtc
