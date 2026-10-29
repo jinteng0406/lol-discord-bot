@@ -9,11 +9,16 @@ function New-ScheduleEmbed([DateTime]$Day, $Todays, [hashtable]$Odds) {
             $time = Format-TW $t
             if ($t.AddHours(8).Date -gt $Day) { $time += '（隔日）' }
             $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
+            $line = "``$time`` **$a** vs **$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
             $o = $Odds[$ev.match.id]
-            $vs = if ($o) { " $($o[$a])% vs $($o[$b])% " } else { ' vs ' }
-            "``$time`` **$a**$vs**$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
+            if ($o) {
+                # 10-square split bar: blue = first team's win rate, red = second team's
+                $n = [int][Math]::Round($o[$a] / 10)
+                $line += "`n$a **$($o[$a])%** " + ('🟦' * $n) + ('🟥' * (10 - $n)) + " **$($o[$b])%** $b"
+            }
+            $line
         }
-        $fields += @{ name = $g.Name; value = ($lines -join "`n"); inline = $false }
+        $fields += @{ name = $g.Name; value = ($lines -join "`n`n"); inline = $false }
     }
     $dow = '日一二三四五六'[[int]$Day.DayOfWeek]
     @{
@@ -48,7 +53,9 @@ function Update-Schedule {
     $oldText = (@($existing.msg.embeds[0].fields) | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
     $plain = New-ScheduleEmbed $day $todays @{}
     $plainText = ($plain.fields | ForEach-Object { "$($_.name)`n$($_.value)" }) -join "`n"
-    $structural = ($oldText -replace ' \d+% vs \d+% ', ' vs ') -ne $plainText
+    # Drop the win-rate bar lines (and the older inline "20% vs 80%" form) to compare times/teams only
+    $oldPlain = ($oldText -replace "`n[^`n]*🟦[^`n]*|`n[^`n]*🟥[^`n]*", '') -replace ' \d+% vs \d+% ', ' vs '
+    $structural = $oldPlain -ne $plainText
     $last = if ($existing.msg.edited_timestamp) { $existing.msg.edited_timestamp } else { $existing.msg.timestamp }
     $oddsDue = $nowTW.Minute -lt 5 -and (ConvertTo-Utc $last) -lt $nowUtc.AddMinutes(-30)
     if (-not $structural -and -not $oddsDue) { return }
