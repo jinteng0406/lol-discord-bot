@@ -172,7 +172,7 @@ function Invoke-Section([string]$Name, [scriptblock]$Block) {
 }
 
 # Read as UTF-8 explicitly: PS 5.1 would parse a BOM-less file as ANSI and break the Chinese strings
-foreach ($part in 'odds.ps1', 'stats.ps1', 'live.ps1', 'pickem.ps1') {
+foreach ($part in 'odds.ps1', 'stats.ps1', 'live.ps1', 'pickem.ps1', 'vod.ps1') {
     . ([ScriptBlock]::Create((Get-Content "$root\$part" -Raw -Encoding UTF8)))
 }
 
@@ -265,6 +265,8 @@ if ($cfg.channels.odds) {
     Invoke-Section 'champion' { Send-ChampionCard }
     Invoke-Section 'odds' { Update-OddsMessage -Force:([bool]$script:postedAny) }
 }
+
+Invoke-Section 'vod' { Add-VodLinks }
 
 if ($script:problems.Count) {
     Set-Content "$root\last-error.txt" ($script:problems -join "`n") -Encoding UTF8
