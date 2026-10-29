@@ -1,4 +1,4 @@
-﻿# One pass of the LoL esports poster: daily schedule (once a day) + per-game / per-series results.
+﻿# One pass of the LoL esports poster: daily schedule, reminders, lineups, results, pick'em and title odds.
 # Dedup state lives in Discord itself: every bot embed carries a key in its footer ("#<key>"),
 # so the GitHub Actions runner and the home-PC runner never post the same thing twice.
 #   .\bot.ps1                          live pass
@@ -84,20 +84,36 @@ function Invoke-DiscordFiles([string]$Method, [string]$Path, $Payload, [hashtabl
     Invoke-Discord $Method $Path $ms.ToArray() "multipart/form-data; boundary=$boundary"
 }
 
-# Footer keys of this bot's recent messages in a channel
-function Get-PostedKeys([string]$ChannelId) {
-    $keys = New-Object System.Collections.Generic.List[string]
-    if (-not $token) { return , $keys }
-    if (-not $script:botId) { $script:botId = (Invoke-Discord GET '/users/@me').id }
-    foreach ($m in @(Invoke-Discord GET "/channels/$ChannelId/messages?limit=100")) {
-        if ($m.author.id -ne $script:botId) { continue }
-        foreach ($e in @($m.embeds)) {
-            if ($e.footer.text -match '#(\S+)$') { $keys.Add($Matches[1]) }
+# This bot's recent messages in a channel with their footer keys; cached per pass and updated as we post
+function Get-BotMessages([string]$ChannelId) {
+    if (-not $script:msgCache) { $script:msgCache = @{} }
+    if (-not $script:msgCache.ContainsKey($ChannelId)) {
+        $list = New-Object System.Collections.Generic.List[object]
+        if ($token) {
+            if (-not $script:botId) { $script:botId = (Invoke-Discord GET '/users/@me').id }
+            foreach ($m in @(Invoke-Discord GET "/channels/$ChannelId/messages?limit=100")) {
+                if ($m.author.id -ne $script:botId) { continue }
+                $key = $null
+                foreach ($e in @($m.embeds)) { if ($e.footer.text -match '#(\S+)$') { $key = $Matches[1] } }
+                $list.Add([pscustomobject]@{ id = $m.id; key = $key; msg = $m })
+            }
         }
+        $script:msgCache[$ChannelId] = $list
     }
-    return , $keys
+    , $script:msgCache[$ChannelId]
 }
 
+function Get-PostedKeys([string]$ChannelId) {
+    $keys = New-Object System.Collections.Generic.List[string]
+    foreach ($x in (Get-BotMessages $ChannelId)) { if ($x.key) { $keys.Add($x.key) } }
+    , $keys
+}
+
+function Find-BotMessage([string]$ChannelId, [string]$Key) {
+    (Get-BotMessages $ChannelId) | Where-Object { $_.key -eq $Key } | Select-Object -First 1
+}
+
+# Posts an embed tagged with $Key; the created message is left in $script:lastPosted
 function Send-Embed([string]$ChannelId, $Embed, [string]$Key, [switch]$Silent, [byte[]]$Png) {
     $Embed.footer = @{ text = "$($Embed.footer.text) · #$Key" }
     $body = @{ embeds = @($Embed) }
@@ -107,15 +123,30 @@ function Send-Embed([string]$ChannelId, $Embed, [string]$Key, [switch]$Silent, [
         "[dry-run] -> $ChannelId silent=$([bool]$Silent)"
         ConvertTo-Json -InputObject $body -Depth 10
         if ($Png) { [IO.File]::WriteAllBytes("$root\stats-preview-$Key.png", $Png) }
+        $script:lastPosted = $null
         return
     }
     if ($Png) {
-        Invoke-DiscordFiles POST "/channels/$ChannelId/messages" $body @{ 'stats.png' = $Png } | Out-Null
+        $msg = Invoke-DiscordFiles POST "/channels/$ChannelId/messages" $body @{ 'stats.png' = $Png }
     } else {
-        Invoke-Discord POST "/channels/$ChannelId/messages" $body | Out-Null
+        $msg = Invoke-Discord POST "/channels/$ChannelId/messages" $body
     }
+    (Get-BotMessages $ChannelId).Add([pscustomobject]@{ id = $msg.id; key = $Key; msg = $msg })
+    $script:lastPosted = $msg
     $script:postedAny = $true
     "Posted $Key"
+}
+
+# Replaces the embed of one of our messages (edits never notify)
+function Edit-Embed([string]$ChannelId, [string]$MessageId, $Embed, [string]$Key) {
+    $Embed.footer = @{ text = "$($Embed.footer.text) · #$Key" }
+    if ($DryRun) {
+        "[dry-run] edit $MessageId -> $ChannelId"
+        ConvertTo-Json -InputObject @{ embeds = @($Embed) } -Depth 10
+        return
+    }
+    Invoke-Discord PATCH "/channels/$ChannelId/messages/$MessageId" @{ embeds = @($Embed) } | Out-Null
+    "Edited $Key"
 }
 
 function Get-Events {
@@ -132,52 +163,37 @@ function Get-Events {
 
 function Get-LeagueColor($ev) { [int]$cfg.leagues.($ev.league.slug).color }
 function Format-TW([DateTime]$utc) { $utc.AddHours(8).ToString('HH:mm') }
+function Test-TeamsKnown($ev) { -not (@($ev.match.teams) | Where-Object { -not $_.code -or $_.code -eq 'TBD' }) }
+
+# A failing section is recorded and skipped so the others still run; any failure makes the pass exit 1
+$script:problems = New-Object System.Collections.Generic.List[string]
+function Invoke-Section([string]$Name, [scriptblock]$Block) {
+    try { & $Block } catch { $script:problems.Add("${Name}: $_"); "$Name failed: $_" }
+}
 
 # Read as UTF-8 explicitly: PS 5.1 would parse a BOM-less file as ANSI and break the Chinese strings
-foreach ($part in 'odds.ps1', 'stats.ps1') {
+foreach ($part in 'odds.ps1', 'stats.ps1', 'live.ps1', 'pickem.ps1') {
     . ([ScriptBlock]::Create((Get-Content "$root\$part" -Raw -Encoding UTF8)))
 }
 
-$events = Get-Events
-$silent = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.silentToHourTW
-
-# ---- Daily schedule: window is [today 10:00 TW, tomorrow 10:00 TW) ----
-if ($nowTW.Hour -ge $cfg.scheduleHourTW) {
-    $day = $nowTW.Date
-    $key = 'sched-' + $day.ToString('yyyy-MM-dd')
-    $winStart = $day.AddHours($cfg.scheduleHourTW - 8)   # back to UTC
-    $winEnd = $winStart.AddDays(1)
-    $todays = @($events | Where-Object { $t = ConvertTo-Utc $_.startTime; $t -ge $winStart -and $t -lt $winEnd } |
-        Sort-Object { ConvertTo-Utc $_.startTime })
-    if ($todays.Count -and -not ((Get-PostedKeys $cfg.channels.schedule) -contains $key)) {
-        $fields = @()
-        foreach ($g in ($todays | Group-Object { $_.league.name })) {
-            $lines = foreach ($ev in $g.Group) {
-                $t = ConvertTo-Utc $ev.startTime
-                $time = Format-TW $t
-                if ($t.AddHours(8).Date -gt $day) { $time += '（隔日）' }
-                $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-                "``$time`` **$a** vs **$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
-            }
-            $fields += @{ name = $g.Name; value = ($lines -join "`n"); inline = $false }
-        }
-        $dow = '日一二三四五六'[[int]$day.DayOfWeek]
-        $embed = @{
-            title  = "📅 $($day.ToString('M/d'))（週$dow）賽程"
-            description = '時間為台灣時間，涵蓋今天 10:00 到明天 10:00'
-            color  = Get-LeagueColor $todays[0]
-            fields = $fields
-            footer = @{ text = 'LoL Esports' }
-        }
-        Send-Embed $cfg.channels.schedule $embed $key
-    }
+try {
+    $events = Get-Events
+} catch {
+    Set-Content "$root\last-error.txt" "schedule: $_" -Encoding UTF8
+    throw
 }
+$silent = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.silentToHourTW
+$since = [Math]::Max((ConvertTo-Utc $cfg.postResultsSince).Ticks, $nowUtc.AddHours(-$cfg.resultsLookbackHours).Ticks)
+
+Invoke-Section 'schedule' { Update-Schedule }
+Invoke-Section 'reminders' { Send-Reminders }
+Invoke-Section 'lineups' { Send-Lineups }
 
 # ---- Results: one card per finished game, one summary per finished series ----
-$since = [Math]::Max((ConvertTo-Utc $cfg.postResultsSince).Ticks, $nowUtc.AddHours(-$cfg.resultsLookbackHours).Ticks)
-$live = @($events | Where-Object {
-        ($_.state -eq 'inProgress' -or $_.state -eq 'completed') -and (ConvertTo-Utc $_.startTime).Ticks -ge $since })
-if ($live.Count) {
+Invoke-Section 'results' {
+    $live = @($events | Where-Object {
+            ($_.state -eq 'inProgress' -or $_.state -eq 'completed') -and (ConvertTo-Utc $_.startTime).Ticks -ge $since })
+    if (-not $live.Count) { return }
     $posted = Get-PostedKeys $cfg.channels.results
     foreach ($ev in $live) {
         $m = $ev.match; $id = $m.id
@@ -244,7 +260,13 @@ if ($live.Count) {
     }
 }
 
-# ---- Worlds title odds (pinned message); never let it break the results above ----
+if ($cfg.channels.pickem) { Invoke-Section 'pickem' { Update-Pickem } }
 if ($cfg.channels.odds) {
-    try { Update-OddsMessage -Force:([bool]$script:postedAny) } catch { "odds update failed: $_" }
+    Invoke-Section 'champion' { Send-ChampionCard }
+    Invoke-Section 'odds' { Update-OddsMessage -Force:([bool]$script:postedAny) }
+}
+
+if ($script:problems.Count) {
+    Set-Content "$root\last-error.txt" ($script:problems -join "`n") -Encoding UTF8
+    exit 1
 }

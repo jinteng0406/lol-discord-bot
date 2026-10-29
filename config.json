@@ -16,7 +16,17 @@
   "channels": {
     "schedule": "1565223116832116876",
     "results": "1565223118664896572",
-    "odds": "1565228423238918245"
+    "odds": "1565228423238918245",
+    "pickem": "1565235782908772422"
+  },
+  "alertUserId": "843785728244842527",
+  "alertAfterMinutes": 30,
+  "reminderMinutes": 15,
+  "pickem": {
+    "league": "worlds",
+    "blocks": ["八強賽", "準決賽", "決賽"],
+    "finalBlock": "決賽",
+    "openHours": 24
   },
   "odds": {
     "eventSlug": "worlds-2026-winner",

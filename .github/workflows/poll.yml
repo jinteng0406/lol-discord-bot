@@ -27,9 +27,25 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: ./bot.ps1
 
+      # DM the server owner after alertAfterMinutes without a successful run, and again on recovery
+      - name: Failure alert
+        if: failure()
+        shell: powershell
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./alert.ps1 -Status failed
+
+      - name: Recovery notice
+        if: success()
+        shell: powershell
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        run: ./alert.ps1 -Status ok
+
       # GitHub disables scheduled workflows after 60 days without repo activity; re-enable every Monday
       - name: Keep schedule enabled
-        if: github.event_name == 'schedule'
+        if: always() && github.event_name == 'schedule'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

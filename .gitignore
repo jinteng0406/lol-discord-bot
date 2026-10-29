@@ -3,3 +3,4 @@
 *.log.old
 chart-preview.png
 stats-preview-*.png
+last-error.txt
