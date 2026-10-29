@@ -41,6 +41,17 @@
     "lck": { "id": "98767991310872058", "color": 2003199 },
     "lpl": { "id": "98767991314006698", "color": 15073298 }
   },
+  "stats": {
+    "mvpWeights": {
+      "top": { "damage": 35, "kda": 25, "kp": 20, "gold": 20 },
+      "mid": { "damage": 35, "kda": 25, "kp": 20, "gold": 20 },
+      "bottom": { "damage": 35, "kda": 25, "kp": 20, "gold": 20 },
+      "jungle": { "kp": 35, "kda": 25, "damage": 20, "vision": 20 },
+      "support": { "kp": 40, "vision": 35, "kda": 25 }
+    },
+    "laneWeight": 1,
+    "waitMinutes": 10
+  },
   "lolesportsApiKey": "0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z",
   "scheduleHourTW": 10,
   "silentFromHourTW": 1,

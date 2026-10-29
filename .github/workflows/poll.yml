@@ -15,13 +15,14 @@ concurrency:
 
 jobs:
   poll:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Windows PowerShell 5.1 + System.Drawing, same as the home PC (radar images are composited locally)
+    runs-on: windows-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
 
       - name: Post schedule and results
-        shell: pwsh
+        shell: powershell
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: ./bot.ps1
@@ -29,6 +30,7 @@ jobs:
       # GitHub disables scheduled workflows after 60 days without repo activity; re-enable every Monday
       - name: Keep schedule enabled
         if: github.event_name == 'schedule'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

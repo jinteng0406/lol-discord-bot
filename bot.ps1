@@ -98,16 +98,22 @@ function Get-PostedKeys([string]$ChannelId) {
     return , $keys
 }
 
-function Send-Embed([string]$ChannelId, $Embed, [string]$Key, [switch]$Silent) {
+function Send-Embed([string]$ChannelId, $Embed, [string]$Key, [switch]$Silent, [byte[]]$Png) {
     $Embed.footer = @{ text = "$($Embed.footer.text) · #$Key" }
     $body = @{ embeds = @($Embed) }
     if ($Silent) { $body.flags = 4096 }  # SUPPRESS_NOTIFICATIONS
+    if ($Png) { $body.attachments = @(@{ id = 0; filename = 'stats.png' }) }
     if ($DryRun) {
         "[dry-run] -> $ChannelId silent=$([bool]$Silent)"
         ConvertTo-Json -InputObject $body -Depth 10
+        if ($Png) { [IO.File]::WriteAllBytes("$root\stats-preview-$Key.png", $Png) }
         return
     }
-    Invoke-Discord POST "/channels/$ChannelId/messages" $body | Out-Null
+    if ($Png) {
+        Invoke-DiscordFiles POST "/channels/$ChannelId/messages" $body @{ 'stats.png' = $Png } | Out-Null
+    } else {
+        Invoke-Discord POST "/channels/$ChannelId/messages" $body | Out-Null
+    }
     $script:postedAny = $true
     "Posted $Key"
 }
@@ -128,6 +134,7 @@ function Get-LeagueColor($ev) { [int]$cfg.leagues.($ev.league.slug).color }
 function Format-TW([DateTime]$utc) { $utc.AddHours(8).ToString('HH:mm') }
 
 . "$root\odds.ps1"
+. "$root\stats.ps1"
 
 $events = Get-Events
 $silent = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.silentToHourTW
@@ -203,7 +210,12 @@ if ($live.Count) {
                 footer = @{ text = $footer }
             }
             if ($w -and $w.image) { $embed.thumbnail = @{ url = $w.image } }
-            Send-Embed $cfg.channels.results $embed "g-$id-$n-$a-$b" -Silent:$silent
+            $png = $null
+            if ($w) {
+                $png = Add-GameStatsIfReady $embed $id $n $w.code
+                if ($png -is [string]) { continue }   # feed still live: post next pass with stats
+            }
+            Send-Embed $cfg.channels.results $embed "g-$id-$n-$a-$b" -Silent:$silent -Png $png
         }
 
         if ($ev.state -eq 'completed' -and -not ($posted -contains "s-$id")) {
@@ -219,7 +231,13 @@ if ($live.Count) {
             }
             $embed = @{ title = $title; description = $desc; color = $color; footer = @{ text = $footer } }
             if ($w -and $w.image) { $embed.thumbnail = @{ url = $w.image } }
-            Send-Embed $cfg.channels.results $embed "s-$id" -Silent:$silent
+            $png = $null
+            if ($bo -eq 1 -and $w) {
+                # BO1 has no game card, so its stats go on the summary
+                $png = Add-GameStatsIfReady $embed $id 1 $w.code
+                if ($png -is [string]) { continue }
+            }
+            Send-Embed $cfg.channels.results $embed "s-$id" -Silent:$silent -Png $png
         }
     }
 }
