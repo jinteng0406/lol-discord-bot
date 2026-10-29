@@ -3,22 +3,24 @@
 
 function New-ScheduleEmbed([DateTime]$Day, $Todays, [hashtable]$Odds) {
     $fields = @()
+    # Kept short so lines do not wrap in narrow clients: the stage goes in the field name when shared,
+    # and times before 10:00 are implicitly tomorrow (the description says the window ends at 10:00)
     foreach ($g in ($Todays | Group-Object { $_.league.name })) {
+        $blocks = @($g.Group | ForEach-Object { $_.blockName } | Select-Object -Unique)
         $lines = foreach ($ev in $g.Group) {
-            $t = ConvertTo-Utc $ev.startTime
-            $time = Format-TW $t
-            if ($t.AddHours(8).Date -gt $Day) { $time += '（隔日）' }
             $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
-            $line = "``$time`` **$a** vs **$b** · BO$($ev.match.strategy.count) · $($ev.blockName)"
+            $line = "``$(Format-TW (ConvertTo-Utc $ev.startTime))`` **$a** vs **$b** · BO$($ev.match.strategy.count)"
+            if ($blocks.Count -gt 1) { $line += " · $($ev.blockName)" }
             $o = $Odds[$ev.match.id]
             if ($o) {
-                # 10-square split bar: blue = first team's win rate, red = second team's
+                # 10-square split bar: blue = left team's win rate, red = right team's
                 $n = [int][Math]::Round($o[$a] / 10)
-                $line += "`n$a **$($o[$a])%** " + ('🟦' * $n) + ('🟥' * (10 - $n)) + " **$($o[$b])%** $b"
+                $line += "`n**$($o[$a])%** " + ('🟦' * $n) + ('🟥' * (10 - $n)) + " **$($o[$b])%**"
             }
             $line
         }
-        $fields += @{ name = $g.Name; value = ($lines -join "`n`n"); inline = $false }
+        $name = if ($blocks.Count -eq 1) { "$($g.Name) · $($blocks[0])" } else { $g.Name }
+        $fields += @{ name = $name; value = ($lines -join "`n`n"); inline = $false }
     }
     $dow = '日一二三四五六'[[int]$Day.DayOfWeek]
     @{
@@ -68,7 +70,11 @@ function Update-Schedule {
         $a = $ev.match.teams[0].code; $b = $ev.match.teams[1].code
         $pattern = '`([^`]+)` \*\*' + [regex]::Escape($a) + '\*\*(?: \d+%)? vs (?:\d+% )?\*\*' + [regex]::Escape($b) + '\*\*'
         $old = [regex]::Match($oldText, $pattern); $new = [regex]::Match($newText, $pattern)
-        if (-not $old.Success -or -not $new.Success -or $old.Groups[1].Value -eq $new.Groups[1].Value) { continue }
+        if (-not $old.Success -or -not $new.Success) { continue }
+        # Compare the clock time only, so a change in how the time is written is not a reschedule
+        $oldTime = [regex]::Match($old.Groups[1].Value, '\d{1,2}:\d{2}').Value
+        $newTime = [regex]::Match($new.Groups[1].Value, '\d{1,2}:\d{2}').Value
+        if ($oldTime -eq $newTime) { continue }
         $note = @{
             title = '⚠️ 賽程異動'
             description = "**$a** vs **$b** 改到 ``$($new.Groups[1].Value)``（原 ``$($old.Groups[1].Value)``）"
