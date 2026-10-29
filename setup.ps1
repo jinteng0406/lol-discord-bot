@@ -83,6 +83,7 @@ $readOnlyOverwrites = @(
 
 $cat = Invoke-Discord POST "/guilds/$gid/channels" @{ name = $cfg.category; type = 4 }
 "Created category: $($cat.name)"
+$created = $true
 foreach ($c in @(
         @{ cfg = $cfg.chat; type = 0; ow = @() },
         @{ cfg = $cfg.schedule; type = $readOnlyType; ow = $readOnlyOverwrites },
@@ -94,7 +95,8 @@ foreach ($c in @(
 }
 }
 
-# Move the new category to the top of the category list
+# Move a newly created category to the top of the category list (re-runs keep the server's order)
+if (-not $created) { return }
 $cats = @($channels | Where-Object { $_.type -eq 4 } | Sort-Object position)
 $order = @(@{ id = $cat.id; position = 0 })
 $i = 1
