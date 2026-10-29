@@ -1,4 +1,4 @@
-# Home-PC runner: runs bot.ps1 every minute while logged in. Started hidden at logon by run-hidden.vbs.
+﻿# Home-PC runner: runs bot.ps1 every minute while logged in. Started hidden at logon by run-hidden.vbs.
 $ErrorActionPreference = 'Continue'
 $root = $PSScriptRoot
 $log = "$root\bot.log"

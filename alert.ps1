@@ -32,6 +32,9 @@ if ($Status -eq 'ok') {
 
 if ($open) { return }
 $runs = gh run list --repo $env:GITHUB_REPOSITORY --workflow poll.yml --limit 30 --json conclusion,createdAt | ConvertFrom-Json
+# Require the previous finished run to have failed too, so one blip after a long cron gap does not alert
+$prev = @($runs | Where-Object { $_.conclusion } | Sort-Object { [DateTimeOffset]::Parse("$($_.createdAt)") } -Descending)[0]
+if ($prev -and $prev.conclusion -eq 'success') { return }
 $lastOk = @($runs | Where-Object { $_.conclusion -eq 'success' } | ForEach-Object { [DateTimeOffset]::Parse("$($_.createdAt)").UtcDateTime } | Sort-Object -Descending)[0]
 if ($lastOk -and $lastOk -gt [DateTime]::UtcNow.AddMinutes(-$cfg.alertAfterMinutes)) { return }
 

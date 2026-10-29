@@ -1,4 +1,4 @@
-# Creates the LoL category and channels in the Discord server.
+﻿# Creates the LoL category and channels in the Discord server.
 #   .\setup.ps1 invite   -> print the bot invite URL
 #   .\setup.ps1          -> create category + channels (skips if category already exists)
 param([string]$Mode = 'create')

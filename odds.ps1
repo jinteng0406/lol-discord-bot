@@ -12,8 +12,10 @@ function ConvertTo-Unix([DateTime]$utc) { [DateTimeOffset]::new($utc).ToUnixTime
 # Teams knocked out per lolesports: 3 Swiss losses, or a lost BO5
 function Get-EliminatedCodes {
     $out = @{}
+    $from = ConvertTo-Utc $oc.chartFrom   # earlier editions of the event can be in the feed too
     foreach ($ev in $events) {
         if ($ev.league.slug -ne $oc.league -or $ev.state -ne 'completed') { continue }
+        if ((ConvertTo-Utc $ev.startTime) -lt $from) { continue }
         foreach ($t in $ev.match.teams) {
             if ($t.record -and [int]$t.record.losses -ge 3) { $out[$t.code] = $true }
             if ([int]$ev.match.strategy.count -eq 5 -and $t.result.outcome -eq 'loss') { $out[$t.code] = $true }
@@ -185,6 +187,7 @@ function Update-OddsMessage([switch]$Force) {
     }
     $d = Get-OddsData
     if ($d.closed -and $mine) { return }   # tournament over: keep the final message as is
+    if (-not @($d.teams | Where-Object { -not $_.out }).Count) { return }
     $png = New-OddsChart $d
     $payload = @{ embeds = @(New-OddsEmbed $d); attachments = @(@{ id = 0; filename = 'chart.png' }) }
     if ($DryRun) {

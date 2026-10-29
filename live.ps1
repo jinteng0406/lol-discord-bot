@@ -26,8 +26,8 @@ function New-ScheduleEmbed([DateTime]$Day, $Todays) {
 # Window is [today 10:00 TW, tomorrow 10:00 TW). After the first post the message is edited when matches
 # move or TBD teams are filled in; a changed start time also gets its own short notice.
 function Update-Schedule {
-    if ($nowTW.Hour -lt $cfg.scheduleHourTW) { return }
-    $day = $nowTW.Date
+    # The schedule day runs 10:00 -> 10:00 TW, so before 10:00 we are still syncing yesterday's post
+    $day = $nowTW.AddHours(-$cfg.scheduleHourTW).Date
     $key = 'sched-' + $day.ToString('yyyy-MM-dd')
     $winStart = $day.AddHours($cfg.scheduleHourTW - 8)   # back to UTC
     $winEnd = $winStart.AddDays(1)
@@ -38,7 +38,7 @@ function Update-Schedule {
     $cid = $cfg.channels.schedule
     $existing = Find-BotMessage $cid $key
     if (-not $existing) {
-        Send-Embed $cid $embed $key
+        Send-Embed $cid $embed $key -Silent:$silent
         return
     }
 

@@ -20,7 +20,34 @@ function Get-PickemOptions($ev) {
     $opts
 }
 
-function Get-Field($msg, [string]$Name) { @($msg.embeds[0].fields) | Where-Object { $_.name -eq $Name } | Select-Object -First 1 }
+function New-PickemEmbed($ev, $opts) {
+    $t = ConvertTo-Utc $ev.startTime
+    $rules = '按下方反應投票，一人限一個選項（多選視為無效），開賽即截止。猜中勝方 1 分，比分全中再 +1'
+    if ($ev.blockName -eq $cfg.pickem.finalBlock) { $rules += '，**決賽雙倍**' }
+    @{
+        title = "🎯 競猜：$($ev.match.teams[0].code) vs $($ev.match.teams[1].code)"
+        description = "$($ev.blockName) · BO$($ev.match.strategy.count) · 預定 ``$($t.AddHours(8).ToString('M/d HH:mm'))`` 開打`n`n" +
+            (($opts | ForEach-Object { "$($_.emoji) $($_.label)" }) -join "`n") + "`n`n$rules"
+        color = Get-LeagueColor $ev
+        footer = @{ text = "$($ev.league.name) · $($ev.blockName)" }
+    }
+}
+
+# Adds the bot's own reaction for every option it has not reacted with yet
+function Add-PickemReactions([string]$ChannelId, $Msg, $opts) {
+    $have = @(@($Msg.reactions) | Where-Object { $_.me } | ForEach-Object { "$($_.emoji.name)" })
+    foreach ($o in $opts) {
+        # Ordinal compare: culture-aware equality is unreliable for regional-indicator emoji
+        if ($have | Where-Object { [string]::Equals($_, $o.emoji, [StringComparison]::Ordinal) }) { continue }
+        if ($DryRun) { "[dry-run] react $($o.emoji)"; continue }
+        Invoke-Discord PUT "/channels/$ChannelId/messages/$($Msg.id)/reactions/$([Uri]::EscapeDataString($o.emoji))/@me" $null | Out-Null
+    }
+}
+
+function Get-Field($msg, [string]$Name) {
+    $e = @($msg.embeds) | Select-Object -First 1
+    if ($e) { @($e.fields) | Where-Object { $_.name -eq $Name } | Select-Object -First 1 }
+}
 
 # Rebuild an embed we read back from Discord so it can be sent again with extra fields
 function Copy-PickemEmbed($msg, [string]$ExtraDescription, $ExtraField) {
@@ -51,29 +78,25 @@ function Update-Pickem {
             if ($ev.state -ne 'unstarted' -or $nowUtc -ge $t) { continue }
             $overnight = $nowTW.Hour -ge $cfg.silentFromHourTW -and $nowTW.Hour -lt $cfg.scheduleHourTW
             if ($overnight -and $t.AddHours(8) -gt $nowTW.Date.AddHours($cfg.scheduleHourTW)) { continue }
-            $isFinal = $ev.blockName -eq $pc.finalBlock
-            $rules = '按下方反應投票，一人限一個選項（多選視為無效），開賽即截止。猜中勝方 1 分，比分全中再 +1'
-            if ($isFinal) { $rules += '，**決賽雙倍**' }
-            $embed = @{
-                title = "🎯 競猜：$($ev.match.teams[0].code) vs $($ev.match.teams[1].code)"
-                description = "$($ev.blockName) · BO$($ev.match.strategy.count) · 預定 ``$($t.AddHours(8).ToString('M/d HH:mm'))`` 開打`n`n" +
-                    (($opts | ForEach-Object { "$($_.emoji) $($_.label)" }) -join "`n") + "`n`n$rules"
-                color = Get-LeagueColor $ev
-                footer = @{ text = "$($ev.league.name) · $($ev.blockName)" }
-            }
-            Send-Embed $cid $embed $key -Silent:$silent
-            if ($script:lastPosted) {
-                foreach ($o in $opts) {
-                    Invoke-Discord PUT "/channels/$cid/messages/$($script:lastPosted.id)/reactions/$([Uri]::EscapeDataString($o.emoji))/@me" $null | Out-Null
-                }
-            }
+            Send-Embed $cid (New-PickemEmbed $ev $opts) $key -Silent:$silent
+            if ($script:lastPosted) { Add-PickemReactions $cid $script:lastPosted $opts }
             continue
         }
 
         # Lock at the scheduled start: copy the votes into the post (reactions carry no timestamp)
         $lock = Get-Field $existing.msg $lockField
         if (-not $lock) {
-            if ($nowUtc -lt $t) { continue }
+            if ($nowUtc -lt $t) {
+                # Still open: re-add any option reaction that failed, and follow a rescheduled start time
+                Add-PickemReactions $cid $existing.msg $opts
+                if (-not "$($existing.msg.embeds[0].description)".Contains("``$($t.AddHours(8).ToString('M/d HH:mm'))``")) {
+                    Edit-Embed $cid $existing.id (New-PickemEmbed $ev $opts) $key
+                }
+                continue
+            }
+            # The other runner may have locked it moments ago; its snapshot wins
+            $fresh = Invoke-Discord GET "/channels/$cid/messages/$($existing.id)"
+            if ($fresh -and (Get-Field $fresh $lockField)) { continue }
             $votes = @{}
             for ($i = 0; $i -lt $opts.Count; $i++) {
                 $enc = [Uri]::EscapeDataString($opts[$i].emoji)

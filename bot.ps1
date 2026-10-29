@@ -7,6 +7,7 @@
 param([switch]$DryRun, [string]$Fixture, [string]$Now)
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # PS 5.1 progress bars make Invoke-WebRequest much slower
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $root = $PSScriptRoot
 $discordApi = 'https://discord.com/api/v10'
@@ -55,6 +56,11 @@ function Invoke-Api([string]$Method, [string]$Uri, [hashtable]$Headers, $Body, [
                 $wait = 2
                 try { $wait = [double](ConvertFrom-Json $_.ErrorDetails.Message).retry_after } catch {}
                 Start-Sleep -Milliseconds ([int]($wait * 1000) + 250)
+                continue
+            }
+            # Server errors and timeouts: retry twice (a POST that did go through is caught by Send-Embed's dedup)
+            if (($code -ge 500 -or $code -eq 0) -and $attempt -lt 2) {
+                Start-Sleep -Seconds 3
                 continue
             }
             throw "$Method $Uri failed ($code): $($_.Exception.Message) $($_.ErrorDetails.Message)"
@@ -130,6 +136,20 @@ function Send-Embed([string]$ChannelId, $Embed, [string]$Key, [switch]$Silent, [
         $msg = Invoke-DiscordFiles POST "/channels/$ChannelId/messages" $body @{ 'stats.png' = $Png }
     } else {
         $msg = Invoke-Discord POST "/channels/$ChannelId/messages" $body
+    }
+    # Both runners can decide to post the same key; whichever message came second (higher id) removes itself
+    $dupe = $false
+    try {
+        foreach ($o in @(Invoke-Discord GET "/channels/$ChannelId/messages?limit=20")) {
+            if ($o.author.id -ne $msg.author.id -or [UInt64]$o.id -ge [UInt64]$msg.id) { continue }
+            foreach ($e in @($o.embeds)) { if ($e.footer.text -match '#(\S+)$' -and $Matches[1] -eq $Key) { $dupe = $true } }
+        }
+    } catch {}
+    if ($dupe) {
+        Invoke-Discord DELETE "/channels/$ChannelId/messages/$($msg.id)" | Out-Null
+        $script:lastPosted = $null
+        "Dropped duplicate $Key"
+        return
     }
     (Get-BotMessages $ChannelId).Add([pscustomobject]@{ id = $msg.id; key = $Key; msg = $msg })
     $script:lastPosted = $msg
