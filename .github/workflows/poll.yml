@@ -1,0 +1,37 @@
+name: poll
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Post schedule and results
+        shell: pwsh
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        run: ./bot.ps1
+
+      # GitHub disables scheduled workflows after 60 days without repo activity; re-enable every Monday
+      - name: Keep schedule enabled
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%u%H)" = "100" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/poll.yml/enable"
+          fi

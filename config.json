@@ -1,0 +1,50 @@
+{
+  "guildName": "的大賜福",
+  "category": "🎮 英雄聯盟",
+  "chat": {
+    "name": "💬lol聊天",
+    "topic": "LoL 閒聊、組隊、看比賽一起聊"
+  },
+  "schedule": {
+    "name": "📅每日賽程",
+    "topic": "每日賽程預告，討論請至 #💬lol聊天"
+  },
+  "results": {
+    "name": "📊賽況更新",
+    "topic": "比賽結果與即時比分，討論請至 #💬lol聊天"
+  },
+  "channels": {
+    "schedule": "1565223116832116876",
+    "results": "1565223118664896572",
+    "odds": "1565228423238918245"
+  },
+  "odds": {
+    "eventSlug": "worlds-2026-winner",
+    "league": "worlds",
+    "chartFrom": "2026-10-14T16:00:00Z",
+    "chartStepHours": 3,
+    "chartTop": 8,
+    "highlight": ["CFO"],
+    "refreshMinutes": 60,
+    "teams": {
+      "Gen.G": "GEN", "T1": "T1", "Hanwha Life Esports": "HLE", "Dplus KIA": "DK",
+      "Bilibili Gaming": "BLG", "G2 Esports": "G2", "Karmine Corp": "KC", "Team Secret Whales": "TSW",
+      "CTBC Flying Oyster": "CFO", "MVK Esports": "MVK", "Anyone's Legend": "AL", "Top Esports": "TES",
+      "Invictus Gaming": "IG", "Movistar KOI": "MKOI", "Cloud9": "C9", "Team Liquid": "TLAW",
+      "LYON": "LYON", "LOS": "LOS"
+    }
+  },
+  "leagues": {
+    "worlds": { "id": "98767975604431411", "color": 13150830 },
+    "msi": { "id": "98767991325878492", "color": 4171734 },
+    "lcp": { "id": "113476371197627891", "color": 45737 },
+    "lck": { "id": "98767991310872058", "color": 2003199 },
+    "lpl": { "id": "98767991314006698", "color": 15073298 }
+  },
+  "lolesportsApiKey": "0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z",
+  "scheduleHourTW": 10,
+  "silentFromHourTW": 1,
+  "silentToHourTW": 9,
+  "resultsLookbackHours": 12,
+  "postResultsSince": "2026-10-29T04:57:10Z"
+}
