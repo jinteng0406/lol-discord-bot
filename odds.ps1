@@ -135,9 +135,16 @@ function Get-OddsChangeLine([string[]]$Codes, [DateTime]$StartUtc) {
 
 function New-OddsChart($d) {
     $from = ConvertTo-Utc $oc.chartFrom
+    # QuickChart's free tier rejects charts over ~250 points: widen the step as the tournament gets longer
+    $step = [int]$oc.chartStepHours
+    while (($nowUtc - $from).TotalHours / $step -gt 200) { $step *= 2 }
     $grid = @()
-    for ($t = $from; $t -lt $nowUtc; $t = $t.AddHours($oc.chartStepHours)) { $grid += $t }
-    $labels = @(foreach ($t in $grid) { $tw = $t.AddHours(8); if ($tw.Hour -lt $oc.chartStepHours) { $tw.ToString('M/d') } else { '' } })
+    for ($t = $from; $t -lt $nowUtc; $t = $t.AddHours($step)) { $grid += $t }
+    $every = [int][Math]::Ceiling(($nowUtc - $from).TotalDays / 16)   # date labels overlap past ~16 of them
+    $labels = @(foreach ($t in $grid) {
+            $tw = $t.AddHours(8)
+            if ($tw.Hour -lt $step -and [int]($t - $from).TotalDays % $every -eq 0) { $tw.ToString('M/d') } else { '' }
+        })
     $labels += '現在'
     $snap = @(foreach ($t in $grid) { Get-NormAt $d (ConvertTo-Unix $t) })
 
@@ -183,7 +190,18 @@ function New-OddsChart($d) {
         }
     }
     $json = ConvertTo-Json -InputObject $body -Depth 12 -Compress
-    $r = Invoke-WebRequest -UseBasicParsing -Method POST 'https://quickchart.io/chart' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -Method POST 'https://quickchart.io/chart' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+    } catch {
+        # QuickChart answers a bad chart with an error *image*; the readable reason is in a header
+        $why = ''; $code = 0
+        if ($_.Exception.Response) {
+            $code = [int]$_.Exception.Response.StatusCode
+            try { $why = $_.Exception.Response.Headers['X-quickchart-error'] } catch {}
+        }
+        if ($env:ODDS_DEBUG) { [IO.File]::WriteAllText("$env:ODDS_DEBUG", $json, (New-Object Text.UTF8Encoding $false)) }
+        throw "chart render failed ($code): $why $($_.Exception.Message)"
+    }
     $r.RawContentStream.ToArray()
 }
 
